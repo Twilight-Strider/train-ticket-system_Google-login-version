@@ -1,0 +1,1131 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <!-- CSP (內容安全策略) —— 防止惡意腳本注入，防止 XSS (跨站腳本攻擊) -->
+    <meta http-equiv="Content-Security-Policy" content="
+        default-src 'self';
+        script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.gstatic.com https://unpkg.com https://cdn.tailwindcss.com https://www.google.com https://www.recaptcha.net https://static.cloudflareinsights.com https://apis.google.com https://accounts.google.com;
+        style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://fonts.googleapis.com https://accounts.google.com;
+        font-src 'self' https://fonts.gstatic.com;
+        img-src 'self' data: https:;
+        connect-src 'self' https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com https://firebasestorage.googleapis.com https://www.google.com https://www.recaptcha.net https://content-firebaseappcheck.googleapis.com https://accounts.google.com;
+        frame-src 'self' https://www.google.com https://www.recaptcha.net https://drive.google.com https://accounts.google.com https://ticket-system--login.firebaseapp.com;
+        object-src 'none';
+        base-uri 'self';
+    ">
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- ✏️ 修改這裡可以更改分頁標籤的標題 -->
+    <title>火車選位分票系統</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎫</text></svg>">
+    
+    <!-- Firebase SDK (compat 版本) -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+
+    <!-- App Check -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-check-compat.js"></script>
+    
+    <!-- ✏️ 修改這裡可以更改連結預覽的標題與描述 -->
+    <meta property="og:title" content="火車選位分票系統">
+    <meta property="og:description" content="分票系統">
+    
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    
+    <!-- Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <style>
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #888; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800 font-sans">
+    <div id="root"></div>
+
+    <!-- 凍結核心物件 (Object Freezing) —— 防止篡改邏輯 -->
+    <script>
+        (function() {
+            Object.freeze(window.console);
+            Object.freeze(window.JSON);
+        })();
+    </script>
+
+    <!-- 干擾除錯 (Anti-Debugging)  -->
+    <script>
+        setInterval(function() {
+            const startTime = performance.now();
+            debugger;
+            const endTime = performance.now();
+            if (endTime - startTime > 100) {
+                console.log("請關閉開發者工具！");
+            }
+        }, 1000);
+    </script>
+
+    <script type="text/babel">
+
+        const { useState, useEffect } = React;
+
+        // ╔══════════════════════════════════════════════════════════════╗
+        // ║              🔧 每次複製使用前，只需修改這個區塊               ║
+        // ╚══════════════════════════════════════════════════════════════╝
+        const CONFIG = {
+
+            // ── 1. 參與者名單（Email 白名單）──────────────────────────────────
+            // key   = 該使用者的 Google 帳號 Email（必須完全相符，會自動轉小寫比對）
+            // value = 顯示名稱
+            // 只有列在這裡的 Email 才能登入並寫入資料
+            users: {
+                "hello@gmail.com": "使用者 A",
+                "bob@gmail.com":   "使用者 B",
+                "carol@gmail.com": "使用者 C",
+                "dave@gmail.com":  "使用者 D",
+                "eve@gmail.com":   "使用者 E",
+            },
+
+            // ── 2. 去程資訊 ────────────────────────────────────────────
+            outbound: {
+                // 顯示在選位頁面左上角的資訊列
+                info: [
+                    "車次：請填入車次",
+                    "車型：請填入車型",
+                    "乘車時間：HH：MM - HH：MM",
+                ],
+
+                // 座位圖
+                // 每個 row 有 left（左側2格）和 right（右側2格）
+                //   - { no: '座位號', car: '車廂號' }  → 實際座位
+                //   - { isGhost: true }                → 空白佔位（排位不足時補齊）
+                //   - null                             → 空格（沒有座位）
+                seats: [
+                    {
+                        id: 'row1',
+                        left:  [{ isGhost: true },        { no: '40', car: '12' }],
+                        right: [{ no: '39', car: '12' },  { no: '37', car: '12' }],
+                    },
+                    {
+                        id: 'row2',
+                        left:  [{ no: '34', car: '12' },  { no: '36', car: '12' }],
+                        right: [null, null],
+                    },
+                ],
+
+                // 票券代碼對照表
+                // key 格式：「車廂號-座位號」
+                // value：{ code: "訂票代碼", verify: "取票驗證碼" }
+                tickets: {
+                    "12-34": { code: "XXXXXXX", verify: "XXX" },
+                    "12-36": { code: "XXXXXXX", verify: "XXX" },
+                    "12-37": { code: "XXXXXXX", verify: "XXX" },
+                    "12-39": { code: "XXXXXXX", verify: "XXX" },
+                    "12-40": { code: "XXXXXXX", verify: "XXX" },
+                },
+            },
+
+            // ── 3. 返程資訊 ────────────────────────────────────────────
+            return: {
+                info: [
+                    "車次：請填入車次",
+                    "車型：請填入車型",
+                    "乘車時間：HH：MM - HH：MM",
+                ],
+
+                seats: [
+                    {
+                        id: 'row1',
+                        left:  [{ no: '42', car: '4' }, { no: '44', car: '4' }],
+                        right: [null, null],
+                    },
+                    {
+                        id: 'row2',
+                        left:  [{ no: '38', car: '4' }, { isGhost: true }],
+                        right: [{ no: '39', car: '4' }, { no: '37', car: '4' }],
+                    },
+                ],
+
+                tickets: {
+                    "4-37": { code: "XXXXXXX", verify: "XXX" },
+                    "4-38": { code: "XXXXXXX", verify: "XXX" },
+                    "4-39": { code: "XXXXXXX", verify: "XXX" },
+                    "4-42": { code: "XXXXXXX", verify: "XXX" },
+                    "4-44": { code: "XXXXXXX", verify: "XXX" },
+                },
+            },
+
+            // ── 4. 行程表（完成頁面顯示的 PDF）──────────────────────────
+            // pdfUrl     → Google Drive 預覽連結（iframe 嵌入用）
+            // downloadUrl → Google Drive 下載連結（下載按鈕用）
+            schedule: {
+                pdfUrl:      "https://drive.google.com/file/d/YOUR_FILE_ID/preview",
+                downloadUrl: "https://drive.google.com/u/0/uc?id=YOUR_FILE_ID&export=download",
+            },
+
+            // ── 5. Firebase 設定 ────────────────────────────────────────
+            // 從 Firebase 控制台 → 專案設定 → 您的應用程式 中取得
+            firebase: {
+                apiKey:            "YOUR_API_KEY",
+                authDomain:        "YOUR_PROJECT_ID.firebaseapp.com",
+                projectId:         "YOUR_PROJECT_ID",
+                storageBucket:     "YOUR_PROJECT_ID.firebasestorage.app",
+                messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+                appId:             "YOUR_APP_ID",
+                measurementId:     "YOUR_MEASUREMENT_ID",
+            },
+        };
+        // ╔══════════════════════════════════════════════════════════════╗
+        // ║              以下程式碼不需要修改                             ║
+        // ╚══════════════════════════════════════════════════════════════╝
+
+
+        // ========== Firebase 初始化 ==========
+        if (!firebase.apps.length) {
+            firebase.initializeApp(CONFIG.firebase);
+        }
+        const db = firebase.firestore();
+        const auth = firebase.auth();
+        const googleProvider = new firebase.auth.GoogleAuthProvider();
+        // 每次都讓使用者選擇帳號，避免靜默登入造成困擾
+        googleProvider.setCustomParameters({ prompt: 'select_account' });
+
+
+        // ========== Icons 組件 ==========
+        const IconWarning = () => (
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-yellow-500 w-12 h-12 mb-2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        );
+        const IconCheck = () => (
+            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="text-white"><polyline points="20 6 9 17 4 12"/></svg>
+        );
+        const IconCopy = () => (
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+        );
+        const IconExternal = () => (
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+        );
+        const IconQuestionCircle = () => (
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+                <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+        );
+
+
+        // ========== 主程式 App ==========
+        function App() {
+            const [step, setStep] = useState(0); 
+            const [currentUser, setCurrentUser] = useState("");        // 顯示名稱（例：使用者 A）
+            const [currentUserId, setCurrentUserId] = useState("");    // Firebase Auth uid
+            const [currentEmail, setCurrentEmail] = useState("");      // 使用者 email
+            const [authChecking, setAuthChecking] = useState(true);    // 是否正在檢查登入狀態
+            
+            const [outboundSelection, setOutboundSelection] = useState(null);
+            const [returnSelection, setReturnSelection] = useState(null);
+            const [uploadFile, setUploadFile] = useState(null);
+            
+            const [globalSeats, setGlobalSeats] = useState({ outbound: {}, return: {} });
+
+            // 監聽 Firebase Auth 登入狀態
+            useEffect(() => {
+                const unsubAuth = auth.onAuthStateChanged((user) => {
+                    if (user) {
+                        const email = (user.email || "").toLowerCase();
+                        const displayName = CONFIG.users[email];
+                        if (displayName) {
+                            // 在白名單中
+                            setCurrentUser(displayName);
+                            setCurrentUserId(user.uid);
+                            setCurrentEmail(email);
+                        } else {
+                            // 不在白名單，立即登出
+                            console.warn('未授權的 Email：', email);
+                            auth.signOut();
+                            setCurrentUser("");
+                            setCurrentUserId("");
+                            setCurrentEmail("");
+                        }
+                    } else {
+                        setCurrentUser("");
+                        setCurrentUserId("");
+                        setCurrentEmail("");
+                        setStep(0);
+                    }
+                    setAuthChecking(false);
+                });
+                return () => unsubAuth();
+            }, []);
+
+            useEffect(() => {
+                const unsub = db.collection('config').doc('seats').onSnapshot(doc => {
+                    if (doc.exists) {
+                        const data = doc.data();
+                        console.log('Firestore seats data:', data);
+                        setGlobalSeats(data);
+                    } else {
+                        console.log('Seats document does not exist!');
+                        db.collection('config').doc('seats').set({ outbound: {}, return: {} })
+                            .then(() => console.log('config/seats 初始化完成'))
+                            .catch(err => console.error('初始化失敗：', err));
+                        setGlobalSeats({ outbound: {}, return: {} });
+                    }
+                }, (error) => {
+                    console.error('Error listening to seats:', error);
+                });
+                return () => unsub();
+            }, []);
+
+            useEffect(() => {
+                if (!currentUser) return;
+                
+                const unsubUser = db.collection('users').doc(currentUser).onSnapshot(doc => {
+                    if (doc.exists) {
+                        const data = doc.data();
+                        console.log('User data:', data);
+                        if (data.step !== undefined && data.step > step) {
+                            setStep(data.step);
+                        }
+                        if (data.outboundSelection) setOutboundSelection(data.outboundSelection);
+                        if (data.returnSelection) setReturnSelection(data.returnSelection);
+                    }
+                }, (error) => {
+                    console.error('Error listening to user:', error);
+                });
+                return () => unsubUser();
+            }, [currentUser]);
+
+            const syncUpdate = async (newData) => {
+                if (!currentUser) return;
+                await db.collection('users').doc(currentUser).set(newData, { merge: true });
+            };
+
+            const handleSignOut = async () => {
+                if (!window.confirm("確定要登出嗎？")) return;
+                await auth.signOut();
+                setStep(0);
+                setOutboundSelection(null);
+                setReturnSelection(null);
+            };
+
+            return (
+                <div className="min-h-screen flex flex-col max-w-lg mx-auto bg-white shadow-xl overflow-hidden relative">
+                    {step > 0 && <ProgressBar currentStep={step} />}
+                    {step > 0 && currentUser && (
+                        <div className="flex items-center justify-between px-4 py-1.5 bg-gray-50 border-b border-gray-100 text-xs text-gray-400">
+                            <span>👤 {currentUser}</span>
+                            <button
+                                onClick={handleSignOut}
+                                className="flex items-center gap-1 text-gray-400 hover:text-red-500 transition-colors py-0.5 px-2 rounded hover:bg-red-50"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+                                登出
+                            </button>
+                        </div>
+                    )}
+
+                    <main className="flex-1 overflow-y-auto p-4 pb-24 relative">
+                        {step === 0 && (
+                            <LoginFlow 
+                                authChecking={authChecking}
+                                currentUser={currentUser}
+                                currentEmail={currentEmail}
+                                onComplete={(targetStep = 1) => setStep(Math.max(targetStep || 1, 1))}
+                                db={db}
+                            />
+                        )}
+                        {step === 1 && <Step1_Install onNext={() => syncUpdate({ step: 2 }).then(() => setStep(2))} />}
+                        {step === 2 && (
+                            <Step2_Outbound 
+                                rows={CONFIG.outbound.seats}
+                                info={CONFIG.outbound.info}
+                                selection={outboundSelection}
+                                setSelection={setOutboundSelection}
+                                globalSeats={globalSeats.outbound || {}}
+                                currentUser={currentUser}
+                                onNext={() => syncUpdate({ step: 3 }).then(() => setStep(3))}
+                                onBack={() => setStep(1)}
+                                db={db}
+                                syncUpdate={syncUpdate}
+                            />
+                        )}
+                        {step === 3 && (
+                            <Step3_Return 
+                                rows={CONFIG.return.seats}
+                                info={CONFIG.return.info}
+                                selection={returnSelection}
+                                setSelection={setReturnSelection}
+                                globalSeats={globalSeats.return || {}}
+                                currentUser={currentUser}
+                                onNext={() => syncUpdate({ step: 4 }).then(() => setStep(4))}
+                                onBack={() => setStep(2)}
+                                db={db}
+                                syncUpdate={syncUpdate}
+                            />
+                        )}
+                        {step === 4 && (
+                            <Step4_Upload 
+                                file={uploadFile}
+                                setFile={setUploadFile}
+                                onNext={() => syncUpdate({ step: 5 }).then(() => setStep(5))}
+                                onBack={() => setStep(3)}
+                                currentUser={currentUser}
+                                syncUpdate={syncUpdate}
+                            />
+                        )}
+                        {step === 5 && (
+                            <Step5_Finish 
+                                pdfUrl={CONFIG.schedule.pdfUrl}
+                                downloadUrl={CONFIG.schedule.downloadUrl}
+                            />
+                        )}
+                    </main>
+                </div>
+            );
+        }
+
+        // ========== 子組件 ==========
+
+        const ProgressBar = ({ currentStep }) => {
+            const steps = [1, 2, 3, 4, 5];
+            return (
+                <div className="bg-white border-b border-gray-100 p-4 sticky top-0 z-10 shadow-sm">
+                    <div className="flex justify-between items-center relative">
+                        <div className="absolute top-1/2 left-0 w-full h-1 bg-gray-100 -z-10 transform -translate-y-1/2"></div>
+                        {steps.map((num) => {
+                            const isActive = num === currentStep;
+                            let bgClass = isActive ? "bg-green-500" : "bg-white";
+                            let textClass = isActive ? "text-white" : "text-green-600";
+                            let borderClass = "border-2 border-green-500";
+                            return (
+                                <div key={num} className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold transition-all duration-300 ${bgClass} ${textClass} ${borderClass}`}>
+                                    {num}
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            );
+        };
+
+        const ButtonGroup = ({ onNext, onBack, nextDisabled = false }) => (
+            <div className="fixed bottom-0 left-0 right-0 max-w-lg mx-auto bg-white p-4 border-t border-gray-200 flex justify-between items-center z-20">
+                {onBack ? (
+                    <button onClick={onBack} className="px-6 py-2 text-blue-600 font-medium active:bg-blue-50 rounded-lg transition-colors">
+                        返回
+                    </button>
+                ) : <div></div>}
+                
+                {onNext && (
+                    <button 
+                        onClick={onNext}
+                        disabled={nextDisabled}
+                        className={`px-6 py-2 rounded-lg font-medium text-white transition-colors ${nextDisabled ? 'bg-gray-300' : 'bg-blue-600 hover:bg-blue-700'}`}
+                    >
+                        下一步
+                    </button>
+                )}
+            </div>
+        );
+
+        const LoginFlow = ({ authChecking, currentUser, currentEmail, onComplete, db }) => {
+            const [loading, setLoading] = React.useState(false);
+            const [loginError, setLoginError] = React.useState('');
+            const [entering, setEntering] = React.useState(false);
+
+            // 點擊 Google 登入按鈕
+            const handleGoogleSignIn = async () => {
+                setLoginError('');
+                setLoading(true);
+                try {
+                    await auth.signInWithPopup(googleProvider);
+                    // 登入成功後，App 元件會透過 onAuthStateChanged 接管後續流程
+                } catch (err) {
+                    console.error('Google sign-in error:', err);
+                    if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
+                        // 使用者自己關閉視窗，不顯示錯誤
+                    } else if (err.code === 'auth/popup-blocked') {
+                        setLoginError('彈出視窗被封鎖，請允許此網站開啟彈出視窗後重試');
+                    } else {
+                        setLoginError('登入失敗：' + (err.message || '請稍後再試'));
+                    }
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            // 點擊「進入系統」
+            const handleEnter = async () => {
+                if (!currentUser) return;
+                setEntering(true);
+                setLoginError('');
+                try {
+                    const userDoc = await db.collection('users').doc(currentUser).get();
+                    if (userDoc.exists) {
+                        const userData = userDoc.data();
+                        const targetStep = Math.max(parseInt(userData.step) || 0, 1);
+                        onComplete(targetStep);
+                        return;
+                    }
+                    // 新使用者：建立 Firestore 文件
+                    await db.collection('users').doc(currentUser).set({
+                        name: currentUser,
+                        email: currentEmail,
+                        step: 1,
+                        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                    onComplete(1);
+                } catch (err) {
+                    console.error('Enter error:', err);
+                    setLoginError('進入系統失敗：' + (err.message || '請檢查網路連線後重試'));
+                } finally {
+                    setEntering(false);
+                }
+            };
+
+            // 正在檢查登入狀態，顯示載入中
+            if (authChecking) {
+                return (
+                    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                        <div className="bg-white rounded-xl shadow-2xl p-8 flex flex-col items-center gap-4">
+                            <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600"></div>
+                            <p className="text-gray-600">載入中...</p>
+                        </div>
+                    </div>
+                );
+            }
+
+            // 尚未登入 → 顯示 Google 登入按鈕
+            if (!currentUser) {
+                return (
+                    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                        <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden animate-fade-in-up">
+                            <div className="bg-blue-500 p-4 text-white text-center font-bold text-lg">
+                                歡迎來到火車選位分票系統
+                            </div>
+                            <div className="p-6 flex flex-col gap-4">
+                                <p className="text-gray-600 text-center text-sm">
+                                    請使用您的 Google 帳號登入<br/>
+                                    <span className="text-xs text-gray-400">（僅限受邀的成員）</span>
+                                </p>
+                                <button
+                                    onClick={handleGoogleSignIn}
+                                    disabled={loading}
+                                    className={`w-full flex items-center justify-center gap-3 p-3 border border-gray-300 rounded-lg font-medium transition-all ${loading ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-white text-gray-700 hover:bg-gray-50 hover:shadow-sm'}`}
+                                >
+                                    {loading ? (
+                                        <>
+                                            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-gray-600"></div>
+                                            <span>登入中...</span>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <svg width="20" height="20" viewBox="0 0 48 48">
+                                                <path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8c-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4C12.955 4 4 12.955 4 24s8.955 20 20 20s20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z"/>
+                                                <path fill="#FF3D00" d="M6.306 14.691l6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4C16.318 4 9.656 8.337 6.306 14.691z"/>
+                                                <path fill="#4CAF50" d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238C29.211 35.091 26.715 36 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 44 24 44z"/>
+                                                <path fill="#1976D2" d="M43.611 20.083H42V20H24v8h11.303c-.792 2.237-2.231 4.166-4.087 5.571c.001-.001.002-.001.003-.002l6.19 5.238C36.971 39.205 44 34 44 24c0-1.341-.138-2.65-.389-3.917z"/>
+                                            </svg>
+                                            <span>使用 Google 帳號登入</span>
+                                        </>
+                                    )}
+                                </button>
+                                {loginError && (
+                                    <div className="p-3 bg-red-50 border border-red-200 text-red-600 rounded-lg text-sm">
+                                        {loginError}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
+            // 已登入且在白名單中 → 顯示歡迎畫面
+            return (
+                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden p-6 text-center animate-fade-in-up">
+                        <div className="bg-green-500 rounded-full p-3 mb-4 shadow-lg shadow-green-200 inline-flex">
+                            <IconCheck />
+                        </div>
+                        <h3 className="text-xl font-bold text-gray-800 mb-2">
+                            <span className="text-blue-600">{currentUser}</span>，您好
+                        </h3>
+                        <p className="text-gray-500 text-sm mb-6">{currentEmail}</p>
+                        {loginError && (
+                            <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-600 rounded-lg text-sm text-left">
+                                {loginError}
+                            </div>
+                        )}
+                        <div className="flex justify-between gap-3 mt-4">
+                            <button 
+                                onClick={() => auth.signOut()} 
+                                className="px-4 py-2 text-gray-600 font-medium hover:bg-gray-100 rounded-lg transition-colors" 
+                                disabled={entering}
+                            >
+                                切換帳號
+                            </button>
+                            <button
+                                onClick={handleEnter}
+                                disabled={entering}
+                                className={`px-6 py-2 rounded-lg font-medium text-white transition-colors ${entering ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
+                            >
+                                {entering ? '進入中...' : '進入系統'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const Step1_Install = ({ onNext }) => (
+            <div className="flex flex-col h-full pt-4">
+                <h2 className="text-2xl font-bold text-center text-gray-800 mb-6"><span className="text-blue-500">第一部分</span><br/>安裝台鐵 e 訂通</h2>
+                <div className="flex flex-col md:flex-row gap-6 items-center justify-center flex-1">
+                    <a href="https://play.google.com/store/apps/details?id=tw.gov.tra.twtraffic" target="_blank" className="flex flex-col items-center group w-full md:w-1/2 p-6 bg-white border-2 border-gray-100 hover:border-green-400 rounded-xl transition-all shadow-sm">
+                        <img src="images/Google_Play.png" />
+                        <span className="text-gray-500 group-hover:text-green-600 font-medium">前往 Google Play</span>
+                    </a>
+                    <a href="https://apps.apple.com/tw/app/%E5%8F%B0%E9%90%B5e%E8%A8%82%E9%80%9A/id1441617748" target="_blank" className="flex flex-col items-center group w-full md:w-1/2 p-6 bg-white border-2 border-gray-100 hover:border-blue-400 rounded-xl transition-all shadow-sm">
+                        <img src="images/App_Store.png" />
+                        <span className="text-gray-500 group-hover:text-blue-600 font-medium">前往 App Store</span>
+                    </a>
+                </div>
+                <div className="mt-8 text-center text-gray-400 text-sm">請確保您已成功安裝 App 以利分票進行</div>
+                <ButtonGroup onNext={onNext} />
+            </div>
+        );
+
+        // ========== 座位圖組件 ==========
+        const SeatMap = ({ rows, selection, setSelection, globalSeats, currentUser, title, subtitle, tripType, db, syncUpdate }) => {
+            const handleSeatClick = async (seat) => {
+                if (!seat || seat.isGhost) return;
+                const seatId = `${seat.car}-${seat.no}`;
+                
+                if (globalSeats[seatId] && globalSeats[seatId] !== currentUser) {
+                    alert(`此座位已被 ${globalSeats[seatId]} 選取`);
+                    return;
+                }
+                
+                if (selection === seatId) return;
+                
+                try {
+                    await db.runTransaction(async (transaction) => {
+                        const seatsRef = db.collection('config').doc('seats');
+                        const seatsDoc = await transaction.get(seatsRef);
+                        
+                        if (!seatsDoc.exists) {
+                            transaction.set(seatsRef, {
+                                [tripType]: { [seatId]: currentUser }
+                            });
+                        } else {
+                            const currentSeats = seatsDoc.data();
+                            const fieldSeats = currentSeats[tripType] || {};
+                            
+                            if (fieldSeats[seatId] && fieldSeats[seatId] !== currentUser) {
+                                throw new Error(`此座位已被 ${fieldSeats[seatId]} 選取`);
+                            }
+                            
+                            const updates = {};
+                            
+                            for (const [oldSeatId, owner] of Object.entries(fieldSeats)) {
+                                if (owner === currentUser && oldSeatId !== seatId) {
+                                    updates[`${tripType}.${oldSeatId}`] = firebase.firestore.FieldValue.delete();
+                                    console.log(`釋放舊座位: ${oldSeatId}`);
+                                }
+                            }
+                            
+                            updates[`${tripType}.${seatId}`] = currentUser;
+                            transaction.update(seatsRef, updates);
+                        }
+                    });
+                    
+                    setSelection(seatId);
+                    await syncUpdate({ [`${tripType}Selection`]: seatId });
+                    console.log(`✅ 成功選擇座位: ${seatId}`);
+                } catch (e) {
+                    alert(e.message);
+                    console.error('Transaction error:', e);
+                }
+            };
+
+            const renderSeat = (seat) => {
+                if (!seat) return <div className="w-12 h-12"></div>;
+                if (seat.isGhost) return <div className="w-12 h-12 rounded-lg border-2 border-gray-100 bg-white opacity-50"></div>;
+
+                const seatId = `${seat.car}-${seat.no}`;
+                const isSelected = selection === seatId;
+                const isTakenByOther = globalSeats[seatId] && globalSeats[seatId] !== currentUser;
+
+                let bgClass = "bg-white border-gray-200 hover:border-blue-300";
+                let textClass = "text-gray-500";
+                
+                if (isTakenByOther) {
+                    bgClass = "bg-green-400 border-green-500 cursor-not-allowed";
+                    textClass = "text-white";
+                } else if (isSelected) {
+                    bgClass = "bg-blue-600 border-blue-600 shadow-md transform scale-105";
+                    textClass = "text-white";
+                }
+
+                return (
+                    <div 
+                        onClick={() => handleSeatClick(seat)}
+                        className={`relative w-12 h-12 rounded-lg border-2 flex flex-col items-center justify-center cursor-pointer transition-all duration-200 ${bgClass}`}
+                    >
+                        <span className={`text-sm font-bold ${textClass}`}>{seat.no}</span>
+                    </div>
+                );
+            };
+
+            return (
+                <div className="flex flex-col items-center w-full">
+                    <div className="w-full bg-gray-100 p-4 rounded-lg mb-6 shadow-inner">
+                        <h3 className="font-bold text-lg text-gray-800 mb-2">{title}</h3>
+                        <ul className="text-sm text-gray-600 space-y-1">
+                            {subtitle.map((line, i) => <li key={i}>{line}</li>)}
+                        </ul>
+                    </div>
+
+                    <div className="flex gap-4 mb-6 text-xs flex-wrap justify-center">
+                        <div className="flex items-center gap-1"><div className="w-4 h-4 border border-gray-300 rounded bg-white"></div><span>可選</span></div>
+                        <div className="flex items-center gap-1"><div className="w-4 h-4 rounded bg-blue-500"></div><span>已選</span></div>
+                        <div className="flex items-center gap-1"><div className="w-4 h-4 rounded bg-green-400"></div><span>已被他人選擇</span></div>
+                    </div>
+
+                    <div className="relative bg-white border-x-4 border-gray-300 p-6 rounded-3xl shadow-lg w-full max-w-[340px]">
+                        <div className="absolute top-8 bottom-8 -left-1 w-1 bg-sky-100"></div>
+                        <div className="absolute top-8 bottom-8 -right-1 w-1 bg-sky-100"></div>
+                        <div className="text-center text-gray-300 text-xs mb-4">車頭方向 ▲</div>
+                        <div className="flex flex-col gap-4">
+                            {rows.map((row, idx) => (
+                                <div key={idx} className="flex justify-between items-center relative">
+                                    <div className="flex gap-2">
+                                        {renderSeat(row.left[0])}
+                                        {renderSeat(row.left[1])}
+                                    </div>
+                                    <div className="w-4 h-full bg-gray-50 rounded-full opacity-50 absolute left-1/2 transform -translate-x-1/2 -z-10"></div>
+                                    <div className="flex gap-2">
+                                        {renderSeat(row.right[0])}
+                                        {renderSeat(row.right[1])}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="text-center text-gray-300 text-xs mt-6">車尾方向 ▼</div>
+                    </div>
+                </div>
+            );
+        };
+
+
+        // ========== 取票代碼顯示 ==========
+        const TicketCodeView = ({ type, seatId, tripType }) => {
+            const [copied, setCopied] = useState(null);
+            const [showHelpModal, setShowHelpModal] = useState(false);
+
+            // 從 CONFIG 取得票券資料
+            const ticketData = (CONFIG[tripType].tickets[seatId]) || { code: "未設定", verify: "未設定" };
+
+            const copyToClipboard = (text, label) => {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(text).then(() => {
+                        setCopied(label);
+                        setTimeout(() => setCopied(null), 2000);
+                    });
+                } else {
+                    const textarea = document.createElement("textarea");
+                    textarea.value = text;
+                    document.body.appendChild(textarea);
+                    textarea.select();
+                    try {
+                        document.execCommand('copy');
+                        setCopied(label);
+                        setTimeout(() => setCopied(null), 2000);
+                    } catch (err) {
+                        console.error('Copy failed', err);
+                    }
+                    document.body.removeChild(textarea);
+                }
+            };
+            
+            const helpImageUrl = "https://www.onion-net.com.tw/upload/images/%E6%96%87%E7%AB%A0%E5%9C%96/%E6%96%87-20250114%20%E5%8F%B0%E9%90%B5%E8%A8%82%E7%A5%A8app/collage4.jpg";
+
+            return (
+                <div className="flex flex-col items-center justify-center h-full animate-fade-in-up">
+                    <div className="bg-white p-6 rounded-2xl shadow-lg border border-gray-200 w-full mb-6">
+                        <h3 className="text-gray-600 text-sm font-bold uppercase tracking-wider mb-4 border-b pb-2">{type} 取票資訊</h3>
+                        
+                        <div className="mb-4 text-center p-3 bg-blue-50 rounded-lg">
+                            <span className="text-xs text-gray-500">您的座位</span>
+                            <div className="text-2xl font-bold text-blue-600">{seatId}</div>
+                        </div>
+
+                        <div className="mb-6">
+                            <label className="text-xs text-gray-400 block mb-1">訂票代碼</label>
+                            <div className="flex gap-2">
+                                <div className="flex-1 bg-gray-50 p-3 rounded-lg font-mono font-bold text-xl text-gray-800 border border-gray-200">
+                                    {ticketData.code}
+                                </div>
+                                <button 
+                                    onClick={() => copyToClipboard(ticketData.code, 'booking')}
+                                    className={`px-4 rounded-lg flex items-center justify-center transition-all ${copied === 'booking' ? 'bg-green-500 text-white' : 'bg-blue-50 text-blue-600 hover:bg-blue-100'}`}
+                                >
+                                    {copied === 'booking' ? <IconCheck /> : <IconCopy />}
+                                </button>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label className="text-xs text-gray-400 block mb-1">取票驗證碼</label>
+                            <div className="flex gap-2">
+                                <div className="flex-1 bg-gray-50 p-3 rounded-lg font-mono font-bold text-xl text-gray-800 border border-gray-200">
+                                    {ticketData.verify}
+                                </div>
+                                <button 
+                                    onClick={() => copyToClipboard(ticketData.verify, 'verify')}
+                                    className={`px-4 rounded-lg flex items-center justify-center transition-all ${copied === 'verify' ? 'bg-green-500 text-white' : 'bg-blue-50 text-blue-600 hover:bg-blue-100'}`}
+                                >
+                                    {copied === 'verify' ? <IconCheck /> : <IconCopy />}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button 
+                        onClick={() => setShowHelpModal(true)}
+                        className="flex items-center gap-2 text-sm text-gray-500 hover:text-blue-600 transition-colors px-4 py-2 rounded-full hover:bg-gray-100 cursor-pointer"
+                    >
+                        <IconExternal />
+                        App 取票教學
+                    </button>
+
+                    {showHelpModal && (
+                        <div 
+                            className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+                            onClick={() => setShowHelpModal(false)}
+                        >
+                            <div 
+                                className="relative bg-white rounded-xl shadow-2xl max-w-full max-h-[90vh] overflow-auto animate-fade-in-up"
+                                onClick={(e) => e.stopPropagation()}
+                            >
+                                <button 
+                                    onClick={() => setShowHelpModal(false)}
+                                    className="absolute top-2 right-2 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 z-10"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                                </button>
+                                <img src={helpImageUrl} alt="取票教學" className="w-full h-auto block" />
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const Step2_Outbound = ({ rows, info, selection, setSelection, globalSeats, currentUser, onNext, onBack, db, syncUpdate }) => {
+            const [subStep, setSubStep] = useState(0); 
+
+            const handleNext = () => {
+                if (subStep === 0) setSubStep(1);
+                else onNext();
+            };
+            const handleBack = () => {
+                if (subStep === 1) setSubStep(0);
+                else onBack();
+            };
+
+            return (
+                <div className="pb-10">
+                    <h2 className="text-2xl font-bold text-center text-gray-800 mb-2"><span className="text-blue-500">第二部分</span><br/>去程火車票選位</h2>
+                    {subStep === 0 ? (
+                        <SeatMap 
+                            rows={rows} 
+                            selection={selection} 
+                            setSelection={setSelection} 
+                            globalSeats={globalSeats}
+                            currentUser={currentUser}
+                            title="去程資訊" 
+                            subtitle={info}
+                            tripType="outbound"
+                            db={db}
+                            syncUpdate={syncUpdate}
+                        />
+                    ) : (
+                        <TicketCodeView type="去程" seatId={selection} tripType="outbound" />
+                    )}
+                    <ButtonGroup onNext={handleNext} onBack={handleBack} nextDisabled={subStep === 0 && !selection} />
+                </div>
+            );
+        };
+
+        const Step3_Return = ({ rows, info, selection, setSelection, globalSeats, currentUser, onNext, onBack, db, syncUpdate }) => {
+            const [subStep, setSubStep] = useState(0); 
+            
+            const handleNext = () => subStep === 0 ? setSubStep(1) : onNext();
+            const handleBack = () => subStep === 1 ? setSubStep(0) : onBack();
+
+            return (
+                <div className="pb-10">
+                    <h2 className="text-2xl font-bold text-center text-gray-800 mb-2"><span className="text-blue-500">第三部分</span><br/>返程火車票選位</h2>
+                    {subStep === 0 ? (
+                        <SeatMap 
+                            rows={rows} 
+                            selection={selection} 
+                            setSelection={setSelection} 
+                            globalSeats={globalSeats}
+                            currentUser={currentUser}
+                            title="返程資訊" 
+                            subtitle={info}
+                            tripType="return"
+                            db={db}
+                            syncUpdate={syncUpdate}
+                        />
+                    ) : (
+                        <TicketCodeView type="返程" seatId={selection} tripType="return" />
+                    )}
+                    <ButtonGroup onNext={handleNext} onBack={handleBack} nextDisabled={subStep === 0 && !selection} />
+                </div>
+            );
+        };
+
+        // ========== 圖片上傳（Firebase Database | 用 Base64 文字儲存照片）==========
+        const Step4_Upload = ({ file, setFile, onNext, onBack, currentUser, syncUpdate }) => {
+            const [uploading, setUploading] = useState(false);
+            const [compressing, setCompressing] = useState(false);
+            const [showUploadHelpModal, setShowUploadHelpModal] = React.useState(false);
+
+            const compressImage = async (file) => {
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    
+                    reader.onload = (e) => {
+                        const img = new Image();
+                        img.onload = () => {
+                            const canvas = document.createElement('canvas');
+                            let width = img.width;
+                            let height = img.height;
+                            
+                            const MAX_WIDTH = 1920;
+                            const MAX_HEIGHT = 1920;
+                            
+                            if (width > height) {
+                                if (width > MAX_WIDTH) { height = height * (MAX_WIDTH / width); width = MAX_WIDTH; }
+                            } else {
+                                if (height > MAX_HEIGHT) { width = width * (MAX_HEIGHT / height); height = MAX_HEIGHT; }
+                            }
+                            
+                            canvas.width = width;
+                            canvas.height = height;
+                            
+                            const ctx = canvas.getContext('2d');
+                            ctx.drawImage(img, 0, 0, width, height);
+                            
+                            let quality = 0.7;
+                            let base64 = canvas.toDataURL('image/jpeg', quality);
+                            
+                            while (base64.length > 1024 * 1024 && quality > 0.1) {
+                                quality -= 0.1;
+                                base64 = canvas.toDataURL('image/jpeg', quality);
+                            }
+                            
+                            console.log(`壓縮完成：${(file.size / 1024).toFixed(0)} KB → ${(base64.length / 1024).toFixed(0)} KB (品質: ${(quality * 100).toFixed(0)}%)`);
+                            resolve(base64);
+                        };
+                        
+                        img.onerror = () => reject(new Error('無法讀取圖片'));
+                        img.src = e.target.result;
+                    };
+                    
+                    reader.onerror = () => reject(new Error('無法讀取檔案'));
+                    reader.readAsDataURL(file);
+                });
+            };
+
+            const handleNext = async () => {
+                if (!file) return;
+                setUploading(true);
+                
+                try {
+                    let base64String;
+                    
+                    if (file.size > 1024 * 1024) {
+                        setCompressing(true);
+                        console.log(`圖片太大 (${(file.size / 1024).toFixed(0)} KB)，開始壓縮...`);
+                        base64String = await compressImage(file);
+                        setCompressing(false);
+                    } else {
+                        base64String = await new Promise((resolve, reject) => {
+                            const reader = new FileReader();
+                            reader.onloadend = () => resolve(reader.result);
+                            reader.onerror = () => reject(new Error('讀取失敗'));
+                            reader.readAsDataURL(file);
+                        });
+                    }
+                    
+                    await syncUpdate({ 
+                        screenshotBase64: base64String,
+                        screenshotName: file.name,
+                        screenshotOriginalSize: file.size,
+                        screenshotFinalSize: base64String.length,
+                        uploadedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                    
+                    setUploading(false);
+                    onNext();
+                    
+                } catch (error) {
+                    setUploading(false);
+                    setCompressing(false);
+                    alert('處理失敗：' + error.message);
+                    console.error('Upload error:', error);
+                }
+            };
+
+            return (
+                <div className="h-full flex flex-col">
+                    <h2 className="text-2xl font-bold text-center text-gray-800 mb-6">
+                        <span className="text-blue-500">第四部分</span><br/>上傳分票結果
+                    </h2>
+                    <div className="flex-1 flex flex-col items-center justify-center p-6 border-2 border-dashed border-gray-300 rounded-xl bg-gray-50">
+                        <div className="mb-4 text-6xl">📸</div>
+                        <p className="text-gray-600 text-center mb-6">
+                            請開啟 App 截圖您的取票結果畫面<br/>並上傳至此
+                        </p>
+                        <input 
+                            type="file" 
+                            id="upload-ticket" 
+                            className="hidden" 
+                            accept="image/*" 
+                            onChange={(e) => {
+                                const selectedFile = e.target.files[0];
+                                if (selectedFile) setFile(selectedFile);
+                            }} 
+                        />
+                        <label 
+                            htmlFor="upload-ticket" 
+                            className="px-6 py-3 bg-white border border-gray-300 text-gray-700 font-medium rounded-lg cursor-pointer hover:bg-gray-100 shadow-sm transition-all"
+                        >
+                            {file ? "更換圖片" : "選擇圖片"}
+                        </label>
+                        {file && (
+                            <div className="mt-6 p-3 bg-green-50 border border-green-200 text-green-700 rounded-lg text-sm">
+                                <div className="flex items-center gap-2 mb-1">
+                                    <span>✅ 已選擇：{file.name}</span>
+                                </div>
+                                <div className="text-xs text-gray-600">
+                                    檔案大小：{(file.size / 1024).toFixed(0)} KB
+                                    {file.size > 1024 * 1024 && (
+                                        <span className="ml-2 text-orange-600">（上傳時會自動壓縮）</span>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                    <ButtonGroup onNext={handleNext} onBack={onBack} nextDisabled={!file || uploading} />
+                    
+                    {uploading && (
+                        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                            <div className="bg-white p-6 rounded-xl shadow-xl max-w-sm">
+                                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+                                <p className="text-gray-700 font-medium text-center">
+                                    {compressing ? '正在壓縮圖片...' : '上傳中，請稍候...'}
+                                </p>
+                                {compressing && (
+                                    <p className="text-sm text-gray-500 text-center mt-2">這可能需要幾秒鐘</p>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="mt-4 flex justify-center">
+                        <button 
+                            onClick={() => setShowUploadHelpModal(true)}
+                            className="flex items-center gap-2 text-sm text-gray-500 hover:text-blue-600 transition-colors px-4 py-2 rounded-full hover:bg-gray-100 cursor-pointer"
+                        >
+                            <IconQuestionCircle />
+                            上傳說明
+                        </button>
+                    </div>
+                    
+                    <ButtonGroup onNext={handleNext} onBack={onBack} nextDisabled={!file || uploading} />
+                    
+                    {showUploadHelpModal && (
+                        <div 
+                            className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+                            onClick={() => setShowUploadHelpModal(false)}
+                        >
+                            <div 
+                                className="relative bg-white rounded-xl shadow-2xl max-w-full max-h-[90vh] overflow-auto animate-fade-in-up"
+                                onClick={(e) => e.stopPropagation()}
+                            >
+                                <button 
+                                    onClick={() => setShowUploadHelpModal(false)}
+                                    className="absolute top-2 right-2 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 z-10"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                                    </svg>
+                                </button>
+                                {/*
+                                    可將下方 src 替換為您自己的圖片路徑：
+                                    - 本地部署：放置 images/upload_info.jpg 於同層目錄
+                                    - 使用 CDN/R2：替換為完整 URL，例如 "https://pub-xxxx.r2.dev/upload_info.jpg"
+                                */}
+                                <img 
+                                    src="images/upload_info.jpg"
+                                    alt="上傳說明" 
+                                    className="w-full h-auto block"
+                                />
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+
+        const Step5_Finish = ({ pdfUrl, downloadUrl }) => (
+            <div className="h-full flex flex-col items-center pt-8 animate-fade-in-up">
+                <div className="bg-green-500 rounded-full p-4 mb-4 shadow-lg shadow-green-200"><IconCheck /></div>
+                <h1 className="text-3xl font-bold text-gray-800 mb-6">大功告成 🎉</h1>
+                
+                <div className="w-full bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-6 rounded-lg">
+                    <div className="flex items-start gap-3">
+                        <span className="text-yellow-600 text-2xl flex-shrink-0">⚠️</span>
+                        <div>
+                            <p className="text-yellow-800 font-bold text-sm mb-1">請注意</p>
+                            <p className="text-yellow-700 text-sm">取票後請勿隨意更換手機或移除、重新安裝APP</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="w-full bg-white p-4 rounded-xl shadow-lg border border-gray-200 mb-6">
+                    <h3 className="font-bold text-gray-700 mb-3 border-b pb-2">行程計劃表</h3>
+                    <div className="aspect-[3/4] w-full bg-gray-100 rounded-lg overflow-hidden relative">
+                         <iframe src={pdfUrl} className="w-full h-full border-none" title="行程 PDF"></iframe>
+                    </div>
+                </div>
+                <a href={downloadUrl} target="_blank" className="w-full block text-center px-6 py-4 bg-blue-600 text-white font-bold rounded-xl shadow-lg hover:bg-blue-700 hover:shadow-xl transition-all mb-8">下載行程表 PDF</a>
+            </div>
+        );
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+
+    <style>
+        @keyframes fadeInUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fade-in-up { animation: fadeInUp 0.5s ease-out forwards; }
+        .animate-pulse-once { animation: pulse 0.5s ease-out; }
+    </style>
+</body>
+</html>
