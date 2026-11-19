@@ -227,6 +227,7 @@
             const [currentUserId, setCurrentUserId] = useState("");    // Firebase Auth uid
             const [currentEmail, setCurrentEmail] = useState("");      // 使用者 email
             const [authChecking, setAuthChecking] = useState(true);    // 是否正在檢查登入狀態
+            const [deniedEmail, setDeniedEmail] = useState("");        // 被拒絕（不在白名單）的 Email，用於顯示提示
             
             const [outboundSelection, setOutboundSelection] = useState(null);
             const [returnSelection, setReturnSelection] = useState(null);
@@ -242,12 +243,14 @@
                         const displayName = CONFIG.users[email];
                         if (displayName) {
                             // 在白名單中
+                            setDeniedEmail("");
                             setCurrentUser(displayName);
                             setCurrentUserId(user.uid);
                             setCurrentEmail(email);
                         } else {
                             // 不在白名單，立即登出
                             console.warn('未授權的 Email：', email);
+                            setDeniedEmail(email || "（無法取得 Email）");
                             auth.signOut();
                             setCurrentUser("");
                             setCurrentUserId("");
@@ -337,6 +340,8 @@
                                 authChecking={authChecking}
                                 currentUser={currentUser}
                                 currentEmail={currentEmail}
+                                deniedEmail={deniedEmail}
+                                onClearDenied={() => setDeniedEmail("")}
                                 onComplete={(targetStep = 1) => setStep(Math.max(targetStep || 1, 1))}
                                 db={db}
                             />
@@ -435,7 +440,7 @@
             </div>
         );
 
-        const LoginFlow = ({ authChecking, currentUser, currentEmail, onComplete, db }) => {
+        const LoginFlow = ({ authChecking, currentUser, currentEmail, deniedEmail, onClearDenied, onComplete, db }) => {
             const [loading, setLoading] = React.useState(false);
             const [loginError, setLoginError] = React.useState('');
             const [entering, setEntering] = React.useState(false);
@@ -443,6 +448,7 @@
             // 點擊 Google 登入按鈕
             const handleGoogleSignIn = async () => {
                 setLoginError('');
+                if (onClearDenied) onClearDenied();
                 setLoading(true);
                 try {
                     await auth.signInWithPopup(googleProvider);
@@ -537,6 +543,13 @@
                                         </>
                                     )}
                                 </button>
+                                {deniedEmail && (
+                                    <div className="p-3 bg-red-50 border border-red-200 text-red-600 rounded-lg text-sm space-y-1">
+                                        <p className="font-bold">此帳號不在參與者名單內</p>
+                                        <p className="break-all">{deniedEmail}</p>
+                                        <p>請改用報名時提供的 Google 帳號登入，或聯絡主辦人確認名單。</p>
+                                    </div>
+                                )}
                                 {loginError && (
                                     <div className="p-3 bg-red-50 border border-red-200 text-red-600 rounded-lg text-sm">
                                         {loginError}
@@ -902,6 +915,12 @@
             const [compressing, setCompressing] = useState(false);
             const [showUploadHelpModal, setShowUploadHelpModal] = React.useState(false);
 
+            // Firestore 單一文件上限為 1 MiB，且 Base64 會讓檔案膨脹約 33%。
+            // 因此：原檔超過 NO_COMPRESS_BYTES 就先壓縮；壓縮後字串長度需 <= MAX_BASE64_CHARS
+            // （也低於 README 安全規則中的 1,000,000 字元限制，保留空間給其他欄位）
+            const MAX_BASE64_CHARS = 700000;
+            const NO_COMPRESS_BYTES = 500 * 1024;
+
             const compressImage = async (file) => {
                 return new Promise((resolve, reject) => {
                     const reader = new FileReader();
@@ -931,9 +950,19 @@
                             let quality = 0.7;
                             let base64 = canvas.toDataURL('image/jpeg', quality);
                             
-                            while (base64.length > 1024 * 1024 && quality > 0.1) {
+                            while (base64.length > MAX_BASE64_CHARS && quality > 0.1) {
                                 quality -= 0.1;
                                 base64 = canvas.toDataURL('image/jpeg', quality);
+                            }
+
+                            // 品質降到最低仍太大：逐步縮小尺寸再試
+                            let scale = 1;
+                            while (base64.length > MAX_BASE64_CHARS && scale > 0.3) {
+                                scale *= 0.8;
+                                canvas.width = Math.round(width * scale);
+                                canvas.height = Math.round(height * scale);
+                                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                                base64 = canvas.toDataURL('image/jpeg', 0.5);
                             }
                             
                             console.log(`壓縮完成：${(file.size / 1024).toFixed(0)} KB → ${(base64.length / 1024).toFixed(0)} KB (品質: ${(quality * 100).toFixed(0)}%)`);
@@ -956,7 +985,7 @@
                 try {
                     let base64String;
                     
-                    if (file.size > 1024 * 1024) {
+                    if (file.size > NO_COMPRESS_BYTES) {
                         setCompressing(true);
                         console.log(`圖片太大 (${(file.size / 1024).toFixed(0)} KB)，開始壓縮...`);
                         base64String = await compressImage(file);
@@ -970,6 +999,10 @@
                         });
                     }
                     
+                    if (base64String.length > MAX_BASE64_CHARS) {
+                        throw new Error('圖片太大，無法壓縮到可上傳的大小，請換一張較小的截圖');
+                    }
+
                     await syncUpdate({ 
                         screenshotBase64: base64String,
                         screenshotName: file.name,
@@ -1022,7 +1055,7 @@
                                 </div>
                                 <div className="text-xs text-gray-600">
                                     檔案大小：{(file.size / 1024).toFixed(0)} KB
-                                    {file.size > 1024 * 1024 && (
+                                    {file.size > NO_COMPRESS_BYTES && (
                                         <span className="ml-2 text-orange-600">（上傳時會自動壓縮）</span>
                                     )}
                                 </div>
