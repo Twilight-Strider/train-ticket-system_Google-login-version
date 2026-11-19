@@ -2,6 +2,9 @@
 <html lang="zh-TW">
 <head>
     <!-- CSP (內容安全策略) —— 防止惡意腳本注入，防止 XSS (跨站腳本攻擊) -->
+    <!-- ⚠️ 部署前必做：在下方 frame-src 的結尾（分號前）加入你自己的 Firebase 登入網域，
+         即 CONFIG.firebase.authDomain，例如 https://my-project.firebaseapp.com。
+         沒加的話，Google 登入視窗會被瀏覽器擋下而無法登入。 -->
     <meta http-equiv="Content-Security-Policy" content="
         default-src 'self';
         script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.gstatic.com https://unpkg.com https://cdn.tailwindcss.com https://www.google.com https://www.recaptcha.net https://static.cloudflareinsights.com https://apis.google.com https://accounts.google.com;
@@ -9,7 +12,7 @@
         font-src 'self' https://fonts.gstatic.com;
         img-src 'self' data: https:;
         connect-src 'self' https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com https://firebasestorage.googleapis.com https://www.google.com https://www.recaptcha.net https://content-firebaseappcheck.googleapis.com https://accounts.google.com;
-        frame-src 'self' https://www.google.com https://www.recaptcha.net https://drive.google.com https://accounts.google.com https://ticket-system--login.firebaseapp.com;
+        frame-src 'self' https://www.google.com https://www.recaptcha.net https://drive.google.com https://accounts.google.com;
         object-src 'none';
         base-uri 'self';
     ">
@@ -86,11 +89,11 @@
             // value = 顯示名稱
             // 只有列在這裡的 Email 才能登入並寫入資料
             users: {
-                "hello@gmail.com": "使用者 A",
-                "bob@gmail.com":   "使用者 B",
-                "carol@gmail.com": "使用者 C",
-                "dave@gmail.com":  "使用者 D",
-                "eve@gmail.com":   "使用者 E",
+                "alice@example.com": "使用者 A",
+                "bob@example.com":   "使用者 B",
+                "carol@example.com": "使用者 C",
+                "dave@example.com":  "使用者 D",
+                "eve@example.com":   "使用者 E",
             },
 
             // ── 2. 去程資訊 ────────────────────────────────────────────

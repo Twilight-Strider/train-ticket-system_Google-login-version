@@ -180,15 +180,21 @@ service cloud.firestore {
 
 打開 `index.html`，找到檔案上方標示「🔧 每次複製使用前，只需修改這個區塊」的 `CONFIG`，依 [CONFIG 設定參考](#config-設定參考) 填寫：參與者 Email 白名單、去程／返程的車次資訊與座位圖、每個座位的訂票代碼與驗證碼、行程表 PDF 連結、Firebase 設定。
 
-### 步驟 7：修改內容安全策略（CSP）裡寫死的網域 ⚠️
+### 步驟 7：在內容安全策略（CSP）加入你自己的登入網域 ⚠️
 
-`index.html` 最上方有一段 CSP `<meta>`，其中 `frame-src` 寫死了**原作者專案**的登入網域：
+`index.html` 最上方有一段 CSP `<meta>`，其中 `frame-src` 預設**沒有**任何 Firebase 登入網域，需要由你自己加上。找到這一行：
 
 ```
-https://ticket-system--login.firebaseapp.com
+frame-src 'self' https://www.google.com https://www.recaptcha.net https://drive.google.com https://accounts.google.com;
 ```
 
-請把它換成**你自己的 `authDomain`**（也就是 `CONFIG.firebase.authDomain` 的值，例如 `my-trip-2027.firebaseapp.com`）。**沒改的話，Google 登入視窗無法正常運作。**
+在結尾的分號前，加上**你自己的 `authDomain`**（也就是 `CONFIG.firebase.authDomain` 的值）。例如 `authDomain` 是 `my-trip-2027.firebaseapp.com`，就改成：
+
+```
+frame-src 'self' https://www.google.com https://www.recaptcha.net https://drive.google.com https://accounts.google.com https://my-trip-2027.firebaseapp.com;
+```
+
+**沒加的話，Google 登入視窗無法正常運作。**
 
 > 若你之後在 CSP 之外又引入新的外部資源（字型、圖片 CDN、其他腳本），也要記得到這段 CSP 補上對應網域。
 
@@ -363,7 +369,7 @@ schedule: {
 
 | 現象 | 可能原因與解法 |
 |------|----------------|
-| 點「使用 Google 帳號登入」後視窗空白或登入失敗 | 1) CSP `frame-src` 沒改成你自己的 `authDomain`（步驟 7）；2) 目前網址不在 Authorized domains（步驟 3）；3) 用 `file://` 開啟（步驟 9） |
+| 點「使用 Google 帳號登入」後視窗空白或登入失敗 | 1) CSP `frame-src` 沒有加入你自己的 `authDomain`（步驟 7）；2) 目前網址不在 Authorized domains（步驟 3）；3) 用 `file://` 開啟（步驟 9） |
 | `auth/unauthorized-domain` | 把網站網域加到 Authentication → Settings → Authorized domains |
 | `auth/popup-blocked` | 瀏覽器封鎖彈出視窗，允許後重試 |
 | 登入後馬上被登出，登入頁顯示「此帳號不在參與者名單內」 | Email 不在 `CONFIG.users`，或 key 含大寫（必須全小寫）；請確認對方用的是名單上的那個 Google 帳號 |

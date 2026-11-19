@@ -101,9 +101,9 @@ https://console.firebase.google.com/project/<ID>/authentication/providers
 
 1. 填寫 `CONFIG`：`users`、`outbound`、`return`、`schedule`、`firebase`（欄位格式見 README「CONFIG 設定參考」）。
    - `tickets` 的 key 必須是 `車廂號-座位號`，且與座位圖中每個實際座位一一對應。
-2. **修改 CSP**：檔案最上方 `<meta http-equiv="Content-Security-Policy">` 的 `frame-src` 內，把
-   `https://ticket-system--login.firebaseapp.com`
-   **替換為** `https://<CONFIG.firebase.authDomain>`。不改的話 Google 登入彈出視窗無法運作。
+2. **在 CSP 加入使用者自己的登入網域**：檔案最上方 `<meta http-equiv="Content-Security-Policy">` 的 `frame-src` 預設**沒有**任何 Firebase 網域。請在該指令結尾的分號前，加上 `https://<CONFIG.firebase.authDomain>`（以空格分隔），例如：
+   `... https://accounts.google.com https://<ID>.firebaseapp.com;`
+   不加的話 Google 登入彈出視窗無法運作。**完成後用 grep 確認 `frame-src` 內確實出現該網域。**
 3. （選用）替換頁面標題 `<title>`、`og:title`、`og:description`。
 4. （建議）請使用者決定是否移除「干擾除錯」那段 `setInterval(... debugger ...)` 的 `<script>`；它只會擾亂開發者工具，不提供真正的安全性。
 
@@ -193,7 +193,7 @@ curl -s -o /dev/null -w "%{http_code}\n" https://<網站網域>/
 
 | 現象 | 處理 |
 |------|------|
-| 登入視窗空白／失敗 | 檢查 CSP `frame-src` 是否為使用者自己的 `authDomain`；網域是否在 Authorized domains；是否用 `file://` |
+| 登入視窗空白／失敗 | 檢查 CSP `frame-src` 是否已加入使用者自己的 `authDomain`；網域是否在 Authorized domains；是否用 `file://` |
 | `auth/unauthorized-domain` | 請使用者新增 Authorized domain |
 | `auth/operation-not-supported-in-this-environment` | 用 `file://` 開啟；改用 http(s) |
 | 登入後立刻被登出（登入頁顯示「此帳號不在參與者名單內」） | Email 不在 `CONFIG.users`，或含大寫 |
