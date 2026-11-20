@@ -1,0 +1,61 @@
+name: 回報錯誤
+description: 回報程式的錯誤或異常行為（Google 登入版）
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感謝回報！請**不要**貼出訂票代碼、取票驗證碼、含個人資訊的截圖或 Email。
+        涉及隱私的內容請改寄信到 bug-report-ticket-google@1090033.fyi；疑似資安問題請見 SECURITY.md。
+  - type: dropdown
+    id: area
+    attributes:
+      label: 問題發生在哪個部分？
+      options:
+        - Google 登入／帳號白名單
+        - 選位
+        - 上傳截圖
+        - 票券資訊顯示
+        - 部署／Firebase 設定
+        - 文件
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 發生了什麼事？
+      description: 你預期會發生什麼、實際發生什麼。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 重現步驟
+      placeholder: |
+        1. 打開網頁…
+        2. 點選…
+        3. 看到…
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: 裝置與瀏覽器
+      description: 例如 iPhone 15 / Safari 18、Windows 11 / Chrome 130。
+    validations:
+      required: true
+  - type: textarea
+    id: console
+    attributes:
+      label: 主控台錯誤訊息（選填）
+      description: 按 F12 開啟開發者工具，貼上 Console 裡的紅色錯誤。請先遮蔽個人資訊。
+      render: text
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: 隱私確認
+      options:
+        - label: 我已確認內容中沒有訂票代碼、取票驗證碼、Email 或含個人資訊的截圖
+          required: true
